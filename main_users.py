@@ -6,14 +6,8 @@ from selenium import webdriver
 from selenium.webdriver.common.keys import Keys
 import time
 import hashlib
-import sqlite3
-from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.keys import Keys
-from selenium.webdriver.common.by import By
-from selenium.webdriver.support.ui import WebDriverWait
-from selenium.webdriver.support import expected_conditions as EC
-
+from selenium import webdriver
 
 bot = telebot.TeleBot(TOKEN)
 
@@ -38,82 +32,85 @@ def start_handler(message):
 
     bot.send_message(message.chat.id, "Добро пожаловать, " + message.from_user.first_name , reply_markup=keyboard)
 
-# Обработчик нажатия на кнопку "войти в кабинет"
+# Обработчик нажатия кнопки "Войти в кабинет"
 @bot.callback_query_handler(func=lambda call: call.data == 'login')
-def login_handler(call):
-    # Отправляем сообщение с запросом логина
-    bot.send_message(call.message.chat.id, "Введите логин:")
-    # Задаем следующее состояние - запрос логина
-    bot.register_next_step_handler(call.message, login_next_handler)
+def login_callback_handler(call):
+    # Получаем данные продавца из базы данных
+    db_conn = sqlite3.connect('kaspibot.db', check_same_thread=False)
+    cursor = db_conn.cursor()
+    cursor.execute("SELECT * FROM sellers WHERE telegram_id=?", (call.from_user.id,))
+    seller_data = cursor.fetchone()
+    db_conn.close()
 
+    if not seller_data:
+        bot.send_message(call.message.chat.id, "Вы не зарегистрированы в системе. Свяжитесь с Администратором @karikbol.")
+        return
+
+    # Задаем следующее состояние - запрос логина
+    bot.send_message(call.message.chat.id, "Введите логин:")
+    bot.register_next_step_handler(call.message, login_next_handler)
 
 # Обработчик ввода логина
 def login_next_handler(message):
-    if message.text.lower() == 'отмена':
-        bot.send_message(message.chat.id, "Вы отменили ввод логина.", reply_markup=types.ReplyKeyboardRemove())
-        return
-    call_data = {}
-    call_data['login'] = message.text
-    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
-    keyboard.add(types.KeyboardButton('Отмена'))
-    bot.send_message(message.chat.id, "Введите пароль:", reply_markup=keyboard)
+    # Запрашиваем у пользователя ввод пароля
+    bot.send_message(message.chat.id, "Введите пароль:")
+    # Сохраняем введенный логин в словаре call_data
+    call_data = {"login": message.text}
+    # Задаем следующее состояние - запрос пароля
     bot.register_next_step_handler(message, password_handler, call_data=call_data)
 
 
-# Обработчик ввода пароля
+# обработчик ввода пароля
 def password_handler(message, call_data):
-    if message.text.lower() == 'отмена':
-        bot.send_message(message.chat.id, "Вы отменили ввод пароля.", reply_markup=types.ReplyKeyboardRemove())
-        return
+    # настройки webdriver
+    chrome_options = Options()
+    chrome_options.add_argument("--headless")  # запуск в фоновом режиме, без открытия окна браузера
+    driver = webdriver.Chrome(options=chrome_options)
 
-    db_conn = sqlite3.connect('kaspiusers.db', check_same_thread=False)
-    cursor = db_conn.cursor()
-    cursor.execute("SELECT password FROM data WHERE chat_id=?", (message.chat.id,))
-    password = cursor.fetchone()
-    db_conn.close()
+    # открываем страницу для входа
+    driver.get('https://kaspi.kz/mc/#/login')
 
-    # Проверяем правильность введенного пароля
-    if not password or message.text != password[0]:
-        bot.send_message(message.chat.id, "Неправильный пароль. Введите логин и пароль заново.")
-        # Возвращаемся к началу, запросу логина
-        bot.register_next_step_handler(message, login_next_handler)
-        return
+    # находим поля для ввода логина и пароля, вводим значения
+    username_input = driver.find_element_by_name('username')
+    password_input = driver.find_element_by_name('Пароль')
+    username_input.send_keys(call_data["login"])
+    password_input.send_keys(message.text)
 
-    # Пароль верный, отсылаем сообщение об успешной авторизации
-    bot.send_message(message.chat.id, "Вы успешно авторизовались!")
-
-    # Создаем экземпляр драйвера Chrome
-    options = Options()
-    options.headless = True
-    driver = webdriver.Chrome(options=options)
-
-    # Переходим на страницу логина
-    driver.get("https://kaspi.kz/mc/#/login")
-
-    # Находим поле ввода логина и заполняем его
-    login_field = driver.find_element_by_xpath("//input[@placeholder='Логин']")
-    login_field.send_keys(login)
-
-    # Находим поле ввода пароля и заполняем его
-    password_field = driver.find_element_by_xpath("//input[@placeholder='Пароль']")
-    password_field.send_keys(password)
-
-    # Находим кнопку "Войти" и нажимаем на нее
-    login_button = driver.find_element_by_xpath("//button[@type='submit']")
+    # нажимаем кнопку входа
+    login_button = driver.find_element_by_css_selector('.login-form button[type="submit"]')
     login_button.click()
 
-    # Ждем пока загрузится страница с результатом проверки
-    WebDriverWait(driver, 10).until(
-        EC.presence_of_element_located((By.XPATH, "//div[@class='mc-dashboard-container']"))
-    )
+    # проверяем, успешен ли вход
+    success = False
+    try:
+        success_message = driver.find_element_by_css_selector('.success-message').text
+        if success_message == 'Вы успешно вошли в Кабинет':
+            success = True
+    except:
+        pass
 
-    # Проверяем результат авторизации
-    if driver.current_url == "https://kaspi.kz/mc/#/dashboard":
-        bot.send_message(message.chat.id, "Вы успешно авторизовались!")
-    else:
-        bot.send_message(message.chat.id, "Неправильный логин или пароль")
-
+    # закрываем браузер и сообщаем результат пользователю
     driver.quit()
+
+    if success:
+        bot.send_message(message.chat.id, "Поздравляем! Вы успешно вошли в Кабинет")
+        # сохраним telegram_id с правильным вводенной логином и парольем в таблицу "data" в БД "kaspiusers.db"
+        db_conn = sqlite3.connect('kaspiusers.db', check_same_thread=False)
+        cursor = db_conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS data (login TEXT PRIMARY KEY, password TEXT, telegram_id INTEGER)")
+        cursor.execute("INSERT INTO data (login, password, telegram_id) VALUES (?, ?, ?)",
+                       (call_data["login"], message.text, message.from_user.id))
+        db_conn.commit()
+        db_conn.close()
+    else:
+        bot.send_message(message.chat.id, "Логин или пароль неверны. Повторите попытку.")
+        # отправим кнопку "войти в кабинет" с сообщением "Логин или пароль не верно повторите попытку"
+        login_button = types.InlineKeyboardButton('Войти в кабинет', callback_data='login')
+        keyboard = types.InlineKeyboardMarkup().add(login_button)
+        bot.send_message(message.chat.id, "Логин или пароль неверны. Повторите попытку.", reply_markup=keyboard)
+
+
+
 
 
 # Обработчик всех остальных сообщений, если продавец не зарегистрирован

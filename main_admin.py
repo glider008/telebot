@@ -1,7 +1,8 @@
 import telebot
 import sqlite3
 from config_admin import TOKEN, ADMIN_TELEGRAM_ID
-
+import datetime
+import time
 bot = telebot.TeleBot(TOKEN)
 
 # Обработчик команды /start
@@ -12,6 +13,7 @@ def send_welcome(message):
     else:
         markup = telebot.types.ReplyKeyboardMarkup(row_width=1)
         markup.add(telebot.types.KeyboardButton('Зарегистрировать'))
+        markup.add(telebot.types.KeyboardButton('Пробный Период'))
         markup.add(telebot.types.KeyboardButton('Удалить'))
         markup.add(telebot.types.KeyboardButton('Проверить'))
         markup.add(telebot.types.KeyboardButton('Изменить'))
@@ -64,6 +66,62 @@ def add_seller_to_db(message, telegram_id, name, phone_number):
         conn.commit()
 
         bot.reply_to(message, "Продавец успешно зарегистрирован!")
+    except:
+        bot.reply_to(message, "Произошла ошибка при добавлении в базу данных.")
+    finally:
+        conn.close()
+
+
+# Обпаботчик кнопки "Пробный период"
+@bot.message_handler(func=lambda message: message.text == "Пробный Период")
+def register_seller(message):
+    bot.reply_to(message, "Введите telegram id продавца:")
+    bot.register_next_step_handler(message, get_seller_telegram_id)
+
+def get_seller_telegram_id(message):
+    telegram_id = message.text
+    bot.reply_to(message, "Введите имя продавца:")
+    bot.register_next_step_handler(message, get_seller_name, telegram_id, )
+
+def get_seller_name(message, telegram_id, ):
+    name = message.text
+    bot.reply_to(message, "Введите номер телефона продавца:")
+    bot.register_next_step_handler(message, get_seller_phone_number, telegram_id, name,)
+
+def get_seller_phone_number(message, telegram_id, name, ):
+    phone_number = message.text
+    bot.reply_to(message, "Введите API Kaspistore продавца:")
+    bot.register_next_step_handler(message, add_seller_to_db, telegram_id, name, phone_number, )
+
+
+def add_seller_to_db(message, telegram_id, name, phone_number, ):
+    kaspistore_api = message.text
+    try:
+        # Создаем таблицу в базе данных kaspibot.db
+        conn = sqlite3.connect('kaspibot.db')
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS trial_users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id TEXT, name TEXT, phone_number TEXT, kaspistore_api TEXT, trial_expiry INTEGER)")
+        conn.commit()
+
+
+        # Вычисляем время окончания пробного периода
+        trial_expiry = int(time.time()) + 120  # 2 minutes in seconds
+
+        # Добавляем запись в таблицу в базе данных kaspibot.db
+        cursor.execute("INSERT INTO trial_users (telegram_id, name, phone_number, kaspistore_api, trial_expiry) VALUES (?, ?, ?, ?, ?)", (telegram_id, name, phone_number, kaspistore_api, trial_expiry))
+        conn.commit()
+
+        # Создаем таблицу в базе данных kaspiusers.db
+        conn = sqlite3.connect('kaspiusers.db')
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE IF NOT EXISTS trial_users (id INTEGER PRIMARY KEY AUTOINCREMENT, telegram_id TEXT, name TEXT, phone_number TEXT, kaspistore_api TEXT, trial_expiry INTEGER)")
+        conn.commit()
+
+        # Добавляем запись в таблицу в базе данных kaspiusers.db
+        cursor.execute("INSERT INTO trial_users (telegram_id, name, phone_number, kaspistore_api, trial_expiry) VALUES (?, ?, ?, ?, ?)", (telegram_id, name, phone_number, kaspistore_api, trial_expiry))
+        conn.commit()
+
+        bot.reply_to(message, f"Продавец успешно зарегистрирован на 2-минутный пробный период! Он истекает через {2} минут.")
     except:
         bot.reply_to(message, "Произошла ошибка при добавлении в базу данных.")
     finally:
